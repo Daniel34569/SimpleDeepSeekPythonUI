@@ -3,8 +3,6 @@ A python UI using deep seek API / Readme Generate by DeepSeek
 
 # DeepSeek Client - 圖形介面客戶端 / GUI Client
 
-[English Version Below](#english-version)
-
 ## 主要功能 / Key Features
 
 - 🆕 多對話管理 / Multi-conversation management
