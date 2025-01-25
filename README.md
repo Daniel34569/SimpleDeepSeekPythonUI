@@ -1,5 +1,5 @@
-# SimpleDeepSeekPythonUI
-A python UI using deep seek API / Readme Generate by DeepSeek
+# DeepSeek UI
+A python UI for deep seek API / Readme Generate by DeepSeek
 
 # DeepSeek Client - 圖形介面客戶端 / GUI Client
 
