@@ -21,6 +21,7 @@ A python UI for deep seek API / Readme Generate by DeepSeek
 - tiktoken
 - openai
 - DeepSeek API密鑰 / API Key
+- API密鑰需要從Deepseek官網獲得 / Get API Key from Deepseek website https://platform.deepseek.com/ 
 
 ### 啟動 / Run application
 python main.py
