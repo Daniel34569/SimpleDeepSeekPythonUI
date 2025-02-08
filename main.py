@@ -3,7 +3,7 @@ import json
 import time
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QSplitter, QHBoxLayout, QVBoxLayout,
                              QLineEdit, QTextEdit, QPushButton, QLabel, QListWidget, QListWidgetItem,
-                             QGroupBox, QFileDialog, QMessageBox, QDialog, QSpinBox, QDoubleSpinBox)
+                             QGroupBox, QFileDialog, QMessageBox, QDialog, QSpinBox, QDoubleSpinBox, QRadioButton, QButtonGroup)
 from PyQt5.QtCore import Qt, QSize, QTimer
 from PyQt5.QtGui import QColor
 import tiktoken
@@ -54,6 +54,7 @@ class DeepSeekUI(QMainWindow):
         self.current_conversation = None
         self.conversations = {}
         self.config = ConfigManager.load_config()
+        self.current_model = "v3"
         self.history_limit = self.config.get('history_limit', 10)
         self.initUI()
         self.load_conversations()
@@ -296,8 +297,16 @@ class DeepSeekUI(QMainWindow):
             temperature = self.temperature_input.value()
             messages = self.build_history_messages(prompt)
 
+            if self.current_model == "v3":
+                using_model = "deepseek-chat"
+            elif self.current_model == "r1":
+                using_model = "deepseek-reasoner"
+            else:
+                print(f"Model Should Be V3 or R1!!!")
+                return
+            print(f"using_model:{using_model}")
             response: ChatCompletion = self.client.chat.completions.create(
-                model="deepseek-chat",
+                model=using_model,
                 messages=messages,
                 stream=False,
                 temperature=temperature
@@ -483,6 +492,32 @@ class DeepSeekUI(QMainWindow):
         
         layout.addWidget(QLabel("最大歷史紀錄輪數:"))
         layout.addWidget(history_limit_spin)
+        
+        layout.addWidget(QLabel("使用模型:"))
+
+        # 新增水平布局放置 RadioButton
+        model_layout = QHBoxLayout()
+        self.v3_radio = QRadioButton("V3")
+        self.r1_radio = QRadioButton("R1")
+        
+        # 设置互斥组
+        radio_group = QButtonGroup(dialog)
+        radio_group.addButton(self.v3_radio)
+        radio_group.addButton(self.r1_radio)
+        
+        # 设置默认选中
+        if self.current_model == "v3":
+            self.v3_radio.setChecked(True)
+        else:
+            self.r1_radio.setChecked(True)
+        
+        # 连接信号
+        self.v3_radio.toggled.connect(lambda: setattr(self, 'current_model', 'v3'))
+        self.r1_radio.toggled.connect(lambda: setattr(self, 'current_model', 'r1'))
+        
+        model_layout.addWidget(self.v3_radio)
+        model_layout.addWidget(self.r1_radio)
+        layout.addLayout(model_layout)
         
         save_btn = QPushButton("保存設置")
         save_btn.clicked.connect(dialog.accept)
