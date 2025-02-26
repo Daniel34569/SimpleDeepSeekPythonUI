@@ -3,7 +3,8 @@ import json
 import time
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QSplitter, QHBoxLayout, QVBoxLayout,
                              QLineEdit, QTextEdit, QPushButton, QLabel, QListWidget, QListWidgetItem,
-                             QGroupBox, QFileDialog, QMessageBox, QDialog, QSpinBox, QDoubleSpinBox, QRadioButton, QButtonGroup)
+                             QGroupBox, QFileDialog, QMessageBox, QDialog, QSpinBox, QDoubleSpinBox,
+                             QRadioButton, QButtonGroup, QMenu, QInputDialog, QCheckBox)
 from PyQt5.QtCore import Qt, QSize, QTimer
 from PyQt5.QtGui import QColor
 import tiktoken
@@ -18,10 +19,22 @@ class ConfigManager:
         try:
             with open(cls.CONFIG_FILE, 'r') as f:
                 config = json.load(f)
-                if 'conversations' not in config:
+                if 'conversations' in config and config['conversations']:
+                    if isinstance(config['conversations'][0], str):
+                        new_conv_list = []
+                        for conv_id in config['conversations']:
+                            new_conv_list.append({
+                                'id': conv_id,
+                                'name': f"Conversation {conv_id}",
+                                'file': f"log/{conv_id}.txt"
+                            })
+                        config['conversations'] = new_conv_list
+                else:
                     config['conversations'] = []
                 if 'history_limit' not in config:
                     config['history_limit'] = 10
+                if 'use_timestamp' not in config:
+                    config['use_timestamp'] = True
                 return config
         except FileNotFoundError:
             return cls.load_default_config()
@@ -43,7 +56,8 @@ class ConfigManager:
             'api_key': '',
             'price_per_token': 0.02,
             'conversations': [],
-            'history_limit': 10
+            'history_limit': 10,
+            'use_timestamp': True
         }
 
 
@@ -56,6 +70,7 @@ class DeepSeekUI(QMainWindow):
         self.config = ConfigManager.load_config()
         self.current_model = "v3"
         self.history_limit = self.config.get('history_limit', 10)
+        self.use_timestamp = self.config.get('use_timestamp', True)
         self.initUI()
         self.load_conversations()
         self.setStyleSheet(self.get_stylesheet())
@@ -122,7 +137,9 @@ class DeepSeekUI(QMainWindow):
         config = {
             'api_key': self.api_key_input.text(),
             'price_per_token': float(self.price_input.text() or 0),
-            'conversations': list(self.conversations.keys())
+            'conversations': list(self.config.get('conversations', [])),
+            'history_limit': self.history_limit,
+            'use_timestamp': self.use_timestamp
         }
         ConfigManager.save_config(config)
 
@@ -149,6 +166,9 @@ class DeepSeekUI(QMainWindow):
         self.conversation_list.itemClicked.connect(self.load_conversation)
         self.conversation_list.itemDoubleClicked.connect(self.show_conversation_details)
         
+        self.conversation_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.conversation_list.customContextMenuRequested.connect(self.show_conversation_context_menu)
+        
         new_btn = QPushButton("New Conversation")
         new_btn.clicked.connect(self.new_conversation)
         
@@ -157,6 +177,67 @@ class DeepSeekUI(QMainWindow):
         layout.addWidget(self.conversation_list)
         panel.setLayout(layout)
         return panel
+
+    def show_conversation_context_menu(self, pos):
+        item = self.conversation_list.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu()
+        rename_action = menu.addAction("Rename")
+        delete_action = menu.addAction("Delete")
+        action = menu.exec_(self.conversation_list.mapToGlobal(pos))
+        conv_id = item.data(Qt.UserRole)
+        if action == rename_action:
+            self.rename_conversation(conv_id)
+        elif action == delete_action:
+            self.delete_conversation(conv_id)
+
+    def rename_conversation(self, conv_id):
+        conv = self.conversations.get(conv_id)
+        if not conv:
+            return
+        new_name, ok = QInputDialog.getText(self, "Rename Conversation", "Enter new name:", text=conv.get('name', conv_id))
+        if ok and new_name.strip():
+            new_name = new_name.strip()
+            old_file = conv['file']
+            new_file = os.path.join("log", f"{new_name}.txt")
+            try:
+                if os.path.exists(old_file):
+                    os.rename(old_file, new_file)
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"無法重新命名檔案: {str(e)}")
+                return
+            conv['name'] = new_name
+            conv['file'] = new_file
+            for idx, item in enumerate(self.config.get('conversations', [])):
+                if item['id'] == conv_id:
+                    self.config['conversations'][idx]['name'] = new_name
+                    self.config['conversations'][idx]['file'] = new_file
+                    break
+            self.update_conversation_list()
+            self.save_state()
+            QMessageBox.information(self, "Success", "Conversation renamed successfully.")
+
+    def delete_conversation(self, conv_id):
+        conv = self.conversations.get(conv_id)
+        if not conv:
+            return
+        reply = QMessageBox.question(self, "Delete Conversation", f"Are you sure you want to delete conversation '{conv['name']}'?",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            try:
+                if os.path.exists(conv['file']):
+                    os.remove(conv['file'])
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to delete log file: {str(e)}")
+            self.conversations.pop(conv_id, None)
+            new_conv_list = [item for item in self.config.get('conversations', []) if item['id'] != conv_id]
+            self.config['conversations'] = new_conv_list
+            if self.current_conversation and self.current_conversation['id'] == conv_id:
+                self.current_conversation = None
+            self.update_conversation_list()
+            self.save_state()
+            QMessageBox.information(self, "Deleted", "Conversation deleted successfully.")
 
     def create_center_panel(self):
         panel = QWidget()
@@ -304,7 +385,7 @@ class DeepSeekUI(QMainWindow):
             else:
                 print(f"Model Should Be V3 or R1!!!")
                 return
-            print(f"using_model:{using_model}")
+            print(f"using_model:{using_model}, messages:{messages}")
             response: ChatCompletion = self.client.chat.completions.create(
                 model=using_model,
                 messages=messages,
@@ -337,10 +418,8 @@ class DeepSeekUI(QMainWindow):
             QMessageBox.warning(self, "Failed", "No history to delete")
             return
 
-        last_entry = self.current_conversation['history'].pop()
-        
+        self.current_conversation['history'].pop()
         self.rewrite_conversation_file()
-        
         self.update_history_list()
         QMessageBox.information(self, "Success", "已刪除最近一次對話紀錄")
 
@@ -349,7 +428,7 @@ class DeepSeekUI(QMainWindow):
             return
         
         try:
-            with open(self.current_conversation['file'], 'w') as f:
+            with open(self.current_conversation['file'], 'w', encoding="utf-8-sig") as f:
                 for entry in self.current_conversation['history']:
                     f.write(json.dumps(entry) + "\n")
         except Exception as e:
@@ -417,13 +496,26 @@ class DeepSeekUI(QMainWindow):
 
     def new_conversation(self):
         conv_id = str(int(time.time()))
-        self.current_conversation = {
+        if self.use_timestamp:
+            new_name = f"Conversation {conv_id}"
+        else:
+            new_name, ok = QInputDialog.getText(self, "New Conversation Name", "Enter conversation name:")
+            if not ok or not new_name.strip():
+                return
+            new_name = new_name.strip()
+        conv_data = {
             'id': conv_id,
-            'file': f"log/{conv_id}.txt",
+            'name': new_name,
+            'file': os.path.join("log", f"{new_name}.txt"),
             'history': []
         }
-        self.conversations[conv_id] = self.current_conversation
-        self.config['conversations'].append(conv_id)
+        self.current_conversation = conv_data
+        self.conversations[conv_id] = conv_data
+        self.config.setdefault('conversations', []).append({
+            'id': conv_id,
+            'name': conv_data['name'],
+            'file': conv_data['file']
+        })
         self.update_conversation_list()
 
     def save_conversation(self, prompt, response, usage):
@@ -436,17 +528,18 @@ class DeepSeekUI(QMainWindow):
         self.current_conversation['history'].append(entry)
         
         os.makedirs("log", exist_ok=True)
-        with open(self.current_conversation['file'], 'a') as f:
-            f.write(json.dumps(entry) + "\n")
+        with open(self.current_conversation['file'], 'a', encoding='utf-8-sig') as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         self.save_state()
 
     def load_conversations(self):
-        conv_ids = self.config.get('conversations', [])
-        for conv_id in conv_ids:
-            file_path = f"log/{conv_id}.txt"
+        for conv_item in self.config.get('conversations', []):
+            conv_id = conv_item['id']
+            file_path = conv_item.get('file', f"log/{conv_id}.txt")
             if os.path.exists(file_path):
                 self.conversations[conv_id] = {
                     'id': conv_id,
+                    'name': conv_item.get('name', f"Conversation {conv_id}"),
                     'file': file_path,
                     'history': self.load_conversation_history(conv_id)
                 }
@@ -455,7 +548,8 @@ class DeepSeekUI(QMainWindow):
     def update_conversation_list(self):
         self.conversation_list.clear()
         for conv in self.conversations.values():
-            item = QListWidgetItem(f"Conversation {conv['id']}")
+            display_text = conv.get('name', conv['id'])
+            item = QListWidgetItem(display_text)
             item.setData(Qt.UserRole, conv['id'])
             self.conversation_list.addItem(item)
 
@@ -470,8 +564,10 @@ class DeepSeekUI(QMainWindow):
 
     def load_conversation_history(self, conv_id):
         history = []
+        conv = self.conversations.get(conv_id)
+        file_path = conv['file'] if conv else f"log/{conv_id}.txt"
         try:
-            with open(f"log/{conv_id}.txt", 'r') as f:
+            with open(file_path, 'r', encoding="utf-8-sig") as f:
                 for line in f:
                     entry = json.loads(line.strip())
                     if 'roles' not in entry:
@@ -483,6 +579,7 @@ class DeepSeekUI(QMainWindow):
         
     def show_settings(self):
         dialog = QDialog(self)
+        dialog.setWindowTitle("Settings")
         layout = QVBoxLayout()
         
         history_limit_spin = QSpinBox()
@@ -514,10 +611,15 @@ class DeepSeekUI(QMainWindow):
         # 连接信号
         self.v3_radio.toggled.connect(lambda: setattr(self, 'current_model', 'v3'))
         self.r1_radio.toggled.connect(lambda: setattr(self, 'current_model', 'r1'))
-        
         model_layout.addWidget(self.v3_radio)
         model_layout.addWidget(self.r1_radio)
         layout.addLayout(model_layout)
+        
+        # 新增 Use Timestamp 的 Checkbox
+        timestamp_checkbox = QCheckBox("Use Timestamp")
+        timestamp_checkbox.setChecked(self.use_timestamp)
+        timestamp_checkbox.stateChanged.connect(lambda state: setattr(self, 'use_timestamp', state == Qt.Checked))
+        layout.addWidget(timestamp_checkbox)
         
         save_btn = QPushButton("保存設置")
         save_btn.clicked.connect(dialog.accept)
